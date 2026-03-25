@@ -1,0 +1,371 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: Copyright (c) 2015-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ /*
+ * nv_imx219.c - "shell" driver used for YUV camera behind MAX9296A/MAX96717F.
+  *
+ * Notes:
+ * 1) This keeps the IMX219 driver skeleton so it can bind into Jetson tegracam.
+ * 2) Sensor-side initialization is expected to be done manually by i2ctransfer
+ *    (or by user-space service), not by this kernel driver.
+  */
+
+ #include <linux/module.h>
+ 
+ #include <nvidia/conftest.h>
+ 
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+ #include <linux/gpio.h>
+ #include <linux/module.h>
+ #include <linux/seq_file.h>
+ #include <linux/of.h>
+ #include <linux/of_device.h>
+ #include <linux/of_gpio.h>
+ 
+ #include <media/tegra_v4l2_camera.h>
+ #include <media/tegracam_core.h>
+ #include <media/imx219.h>
+ 
+ #include "imx219_mode_tbls.h"
+ 
+static const int cam00_30fps[] = {
+	30,
+};
+
+/* Keep exactly matched with device-tree mode0: 1920x1536@30, yuv422 */
+static const struct camera_common_frmfmt cam00_frmfmt[] = {
+	{{1920, 1536}, cam00_30fps, 1, 0, IMX219_MODE_1920x1536_30FPS},
+};
+
+static const struct of_device_id cam00_of_match[] = {
+ 	{ .compatible = "simple,cam_00", },
+ 	{ },
+ };
+MODULE_DEVICE_TABLE(of, cam00_of_match);
+ 
+ static const u32 ctrl_cid_list[] = {
+ 	TEGRA_CAMERA_CID_SENSOR_MODE_ID,
+ };
+ 
+struct cam00 {
+	struct i2c_client *i2c_client;
+	struct v4l2_subdev *subdev;
+	struct camera_common_data *s_data;
+	struct tegracam_device *tc_dev;
+ };
+ 
+ static const struct regmap_config sensor_regmap_config = {
+ 	.reg_bits = 16,
+ 	.val_bits = 8,
+	.cache_type = REGCACHE_NONE,
+ };
+ 
+static inline int cam00_read_reg(struct camera_common_data *s_data,
+ 	u16 addr, u8 *val)
+ {
+	/* YUV board may not respond like a raw image sensor register map. */
+	*val = 0;
+	return 0;
+ }
+ 
+static inline int cam00_write_reg(struct camera_common_data *s_data,
+ 	u16 addr, u8 val)
+ {
+	/* Intentionally no-op: user initializes over i2ctransfer script. */
+	return 0;
+ }
+ 
+static int cam00_write_table(struct cam00 *priv, const imx219_reg table[])
+ {
+	/* Intentionally no-op: do not push sensor tables in kernel. */
+ 	return 0;
+ }
+ 
+static int cam00_set_group_hold(struct tegracam_device *tc_dev, bool val)
+ {
+ 	return 0;
+ }
+ 
+static struct tegracam_ctrl_ops cam00_ctrl_ops = {
+ 	.numctrls = ARRAY_SIZE(ctrl_cid_list),
+ 	.ctrl_cid_list = ctrl_cid_list,
+	.set_group_hold = cam00_set_group_hold,
+ };
+ 
+/*static int cam00_power_on(struct camera_common_data *s_data)
+ {
+ 	struct camera_common_power_rail *pw = s_data->power;
+ 	pw->state = SWITCH_ON;
+ 	return 0;
+
+ }*/
+
+
+static int cam00_power_on(struct camera_common_data *s_data)
+{
+	struct camera_common_power_rail *pw = s_data->power;
+	struct device *dev = s_data->dev;
+	struct device_node *np = dev->of_node;
+	int gpio_camrst = -1;
+
+	dev_info(dev, "cam00: power_on entered\n");
+
+	if (!np) {
+		dev_err(dev, "cam00: no device tree node\n");
+		return -EINVAL;
+	}
+
+	/* 只读取 cam0rst-gpios，方案A不动 sysen */
+	gpio_camrst = of_get_named_gpio(np, "cam0rst-gpios", 0);
+	dev_info(dev, "cam00: cam0rst=%d\n", gpio_camrst);
+
+	if (!gpio_is_valid(gpio_camrst)) {
+		dev_err(dev, "cam00: invalid cam0rst-gpios\n");
+		return -EINVAL;
+	}
+
+	/* 申请 GPIO，初始拉低 */
+	if (devm_gpio_request_one(dev, gpio_camrst,
+				  GPIOF_OUT_INIT_LOW,
+				  "cam00_rst")) {
+		dev_err(dev, "cam00: request cam0rst gpio failed\n");
+		return -EBUSY;
+	}
+
+	/* 先保持低电平一小段时间 */
+	usleep_range(10000, 20000);
+
+	/* 再拉高，释放复位 */
+	gpio_set_value(gpio_camrst, 1);
+
+	/* 等远端板/采集卡稳定 */
+	usleep_range(30000, 50000);
+
+	dev_info(dev, "cam00: cam0rst pulsed LOW->HIGH\n");
+
+	pw->state = SWITCH_ON;
+	return 0;
+}
+ 
+static int cam00_power_off(struct camera_common_data *s_data)
+ {
+ 	struct camera_common_power_rail *pw = s_data->power;
+ 	pw->state = SWITCH_OFF;
+ 	return 0;
+ }
+ 
+static int cam00_power_put(struct tegracam_device *tc_dev)
+ {
+ 	return 0;
+ }
+ 
+static int cam00_power_get(struct tegracam_device *tc_dev)
+ {
+	return 0;
+ }
+ 
+static struct camera_common_pdata *cam00_parse_dt(
+ 	struct tegracam_device *tc_dev)
+ {
+ 	struct device *dev = tc_dev->dev;
+ 	struct device_node *np = dev->of_node;
+ 	struct camera_common_pdata *board_priv_pdata;
+ 	const struct of_device_id *match;
+ 	int err = 0;
+ 
+ 	if (!np)
+ 		return NULL;
+ 
+	match = of_match_device(cam00_of_match, dev);
+ 	if (!match) {
+ 		dev_err(dev, "Failed to find matching dt id\n");
+ 		return NULL;
+ 	}
+ 
+ 	board_priv_pdata = devm_kzalloc(dev,
+ 		sizeof(*board_priv_pdata), GFP_KERNEL);
+ 	if (!board_priv_pdata)
+ 		return NULL;
+ 
+ 	err = of_property_read_string(np, "mclk", &board_priv_pdata->mclk_name);
+ 	if (err)
+		dev_dbg(dev, "mclk name not present, assume externally driven\n");
+ 
+ 	board_priv_pdata->has_eeprom =
+ 		of_property_read_bool(np, "has-eeprom");
+ 
+ 	return board_priv_pdata;
+ }
+ 
+static int cam00_set_mode(struct tegracam_device *tc_dev)
+ {
+	struct cam00 *priv = (struct cam00 *)tegracam_get_privdata(tc_dev);
+ 	struct camera_common_data *s_data = tc_dev->s_data;
+ 
+ 	if (s_data->mode < 0)
+ 		return -EINVAL;
+	return cam00_write_table(priv, mode_table[s_data->mode]);
+ }
+ 
+static int cam00_start_streaming(struct tegracam_device *tc_dev)
+ {
+	struct cam00 *priv = (struct cam00 *)tegracam_get_privdata(tc_dev);
+ 
+	return cam00_write_table(priv, mode_table[IMX219_START_STREAM]);
+ }
+ 
+static int cam00_stop_streaming(struct tegracam_device *tc_dev)
+ {
+	struct cam00 *priv = (struct cam00 *)tegracam_get_privdata(tc_dev);
+ 
+	return cam00_write_table(priv, mode_table[IMX219_STOP_STREAM]);
+ }
+ 
+static struct camera_common_sensor_ops cam00_common_ops = {
+	.numfrmfmts = ARRAY_SIZE(cam00_frmfmt),
+	.frmfmt_table = cam00_frmfmt,
+	.power_on = cam00_power_on,
+	.power_off = cam00_power_off,
+	.write_reg = cam00_write_reg,
+	.read_reg = cam00_read_reg,
+	.parse_dt = cam00_parse_dt,
+	.power_get = cam00_power_get,
+	.power_put = cam00_power_put,
+	.set_mode = cam00_set_mode,
+	.start_streaming = cam00_start_streaming,
+	.stop_streaming = cam00_stop_streaming,
+ };
+ 
+static int cam00_board_setup(struct cam00 *priv)
+ {
+ 	struct camera_common_data *s_data = priv->s_data;
+ 	struct device *dev = s_data->dev;
+	int err;
+ 
+	err = cam00_power_on(s_data);
+	if (err)
+		dev_err(dev, "error during power on camera (%d)\n", err);
+ 	return err;
+ }
+ 
+static int cam00_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
+ {
+ 	struct i2c_client *client = v4l2_get_subdevdata(sd);
+ 
+ 	dev_dbg(&client->dev, "%s:\n", __func__);
+ 	return 0;
+ }
+ 
+static const struct v4l2_subdev_internal_ops cam00_subdev_internal_ops = {
+	.open = cam00_open,
+ };
+ 
+ #if defined(NV_I2C_DRIVER_STRUCT_PROBE_WITHOUT_I2C_DEVICE_ID_ARG) /* Linux 6.3 */
+static int cam00_probe(struct i2c_client *client)
+ #else
+static int cam00_probe(struct i2c_client *client,
+ 	const struct i2c_device_id *id)
+ #endif
+ {
+ 	struct device *dev = &client->dev;
+ 	struct tegracam_device *tc_dev;
+	struct cam00 *priv;
+ 	int err;
+
+	dev_info(dev, "probing cam_00 (deser=0x48, ser=0x40 shell driver)\n");
+ 
+ 	if (!IS_ENABLED(CONFIG_OF) || !client->dev.of_node)
+ 		return -EINVAL;
+ 
+	priv = devm_kzalloc(dev, sizeof(struct cam00), GFP_KERNEL);
+ 	if (!priv)
+ 		return -ENOMEM;
+ 
+	tc_dev = devm_kzalloc(dev, sizeof(struct tegracam_device), GFP_KERNEL);
+ 	if (!tc_dev)
+ 		return -ENOMEM;
+ 
+ 	priv->i2c_client = tc_dev->client = client;
+ 	tc_dev->dev = dev;
+ 	strncpy(tc_dev->name, "cam_00", sizeof(tc_dev->name));
+ 	tc_dev->dev_regmap_config = &sensor_regmap_config;
+	tc_dev->sensor_ops = &cam00_common_ops;
+	tc_dev->v4l2sd_internal_ops = &cam00_subdev_internal_ops;
+	tc_dev->tcctrl_ops = &cam00_ctrl_ops;
+ 
+ 	err = tegracam_device_register(tc_dev);
+ 	if (err) {
+ 		dev_err(dev, "tegra camera driver registration failed\n");
+ 		return err;
+ 	}
+ 	priv->tc_dev = tc_dev;
+ 	priv->s_data = tc_dev->s_data;
+ 	priv->subdev = &tc_dev->s_data->subdev;
+ 	tegracam_set_privdata(tc_dev, (void *)priv);
+ 
+	err = cam00_board_setup(priv);
+ 	if (err) {
+ 		tegracam_device_unregister(tc_dev);
+ 		dev_err(dev, "board setup failed\n");
+ 		return err;
+ 	}
+ 
+ 	err = tegracam_v4l2subdev_register(tc_dev, true);
+ 	if (err) {
+ 		tegracam_device_unregister(tc_dev);
+ 		dev_err(dev, "tegra camera subdev registration failed\n");
+ 		return err;
+ 	}
+ 
+	dev_info(dev, "cam_00 shell driver loaded\n");
+ 	return 0;
+ }
+ 
+ #if defined(NV_I2C_DRIVER_STRUCT_REMOVE_RETURN_TYPE_INT) /* Linux 6.1 */
+static int cam00_remove(struct i2c_client *client)
+ #else
+static void cam00_remove(struct i2c_client *client)
+ #endif
+ {
+ 	struct camera_common_data *s_data = to_camera_common_data(&client->dev);
+	struct cam00 *priv;
+ 
+ 	if (!s_data) {
+ 		dev_err(&client->dev, "camera common data is NULL\n");
+ #if defined(NV_I2C_DRIVER_STRUCT_REMOVE_RETURN_TYPE_INT) /* Linux 6.1 */
+ 		return -EINVAL;
+ #else
+ 		return;
+ #endif
+ 	}
+	priv = (struct cam00 *)s_data->priv;
+ 
+ 	tegracam_v4l2subdev_unregister(priv->tc_dev);
+ 	tegracam_device_unregister(priv->tc_dev);
+ 
+ #if defined(NV_I2C_DRIVER_STRUCT_REMOVE_RETURN_TYPE_INT) /* Linux 6.1 */
+ 	return 0;
+ #endif
+ }
+ 
+static const struct i2c_device_id cam00_id[] = {
+ 	{ "imx219", 0 },
+ 	{ }
+ };
+MODULE_DEVICE_TABLE(i2c, cam00_id);
+ 
+static struct i2c_driver cam00_i2c_driver = {
+ 	.driver = {
+ 		.name = "imx219",
+ 		.owner = THIS_MODULE,
+		.of_match_table = of_match_ptr(cam00_of_match),
+ 	},
+	.probe = cam00_probe,
+	.remove = cam00_remove,
+	.id_table = cam00_id,
+ };
+module_i2c_driver(cam00_i2c_driver);
+ 
+MODULE_DESCRIPTION("Shell tegracam driver for YUV camera over MAX9296A/MAX96717F");
+MODULE_AUTHOR("NVIDIA + Custom Integration");
+ MODULE_LICENSE("GPL v2");

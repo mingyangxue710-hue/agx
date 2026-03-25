@@ -1,0 +1,56 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * imx219_mode_tbls.h - minimal mode table for YUV shell camera.
+ * Kept in IMX219 layout only to satisfy tegracam integration.
+ * Real MAX9296A/MAX96717F + camera initialization is done by i2ctransfer.
+ */
+
+#ifndef __IMX219_I2C_TABLES__
+#define __IMX219_I2C_TABLES__
+
+#define IMX219_TABLE_WAIT_MS 0
+#define IMX219_TABLE_END     1
+
+#define imx219_reg struct reg_8
+
+static imx219_reg imx219_start_stream[] = {
+	{ IMX219_TABLE_END, 0x00 },
+};
+
+static imx219_reg imx219_stop_stream[] = {
+	{ IMX219_TABLE_END, 0x00 },
+};
+
+static imx219_reg imx219_mode_common[] = {
+	{ IMX219_TABLE_END, 0x00 },
+};
+
+/* 1920x1536@30fps yuv422 */
+static imx219_reg imx219_mode_1920x1536_30fps[] = {
+	{ IMX219_TABLE_END, 0x00 },
+};
+
+enum {
+	IMX219_MODE_1920x1536_30FPS,
+	IMX219_MODE_COMMON,
+	IMX219_START_STREAM,
+	IMX219_STOP_STREAM,
+};
+
+static imx219_reg *mode_table[] = {
+	[IMX219_MODE_1920x1536_30FPS] = imx219_mode_1920x1536_30fps,
+	[IMX219_MODE_COMMON] = imx219_mode_common,
+	[IMX219_START_STREAM] = imx219_start_stream,
+	[IMX219_STOP_STREAM] = imx219_stop_stream,
+};
+
+static const int imx219_30fps[] = {
+	30,
+};
+
+/* Must keep ordering consistent with DT mode definition. */
+static const struct camera_common_frmfmt imx219_frmfmt[] = {
+	{{1920, 1536}, imx219_30fps, 1, 0, IMX219_MODE_1920x1536_30FPS},
+};
+
+#endif /* __IMX219_I2C_TABLES__ */
