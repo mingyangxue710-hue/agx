@@ -1,0 +1,136 @@
+/dts-v1/;
+/plugin/;
+
+&{/bus@0/i2c@c240000} {
+    
+	status = "okay";
+	
+		
+		cam_00@48 {
+                        #address-cells = <0x01>;
+		        #size-cells = <0x00>;
+		
+		    
+			status = "okay";
+			sensor_model = "cam_00";
+			mclk = "extperiph1";
+			post_crop_frame_drop = "0";
+			compatible = "simple,cam_00";
+			physical_h = "4.608";
+			reg = <0x48>;
+			cam_addr = <0x40>;
+			dser_addr = <0x48>;
+			use_decibel_gain = "true";
+			physical_w = "5.760";
+			set_mode_delay_ms = "2147483647";
+
+        	sysen-gpios = <&gpio 0x65 0x00>;
+        	cam0rst-gpios = <&gpio 0x3B 0x00>;
+
+			ports {
+				#address-cells = <0x01>;
+				#size-cells = <0x00>;
+				port@0 {
+					reg = <0x00>;
+					imx390_silly_out_ep:endpoint {
+						bus-width = <0x02>;
+						vc-id = <0x00>;
+						port-index = <0x00>;
+						remote-endpoint = <&custom_csi_in_0_ep>;
+					};
+				};
+			};
+			mode0 {
+				discontinuous_clk = "no";
+				readout_orientation = "0";
+				exposure_factor = "1000000";
+				mclk_khz = "24000";
+				default_gain = "0";
+				dpcm_enable = "false";
+				max_gain_val = "300";
+				framerate_factor = "1000000";
+				min_hdr_ratio = "1";
+				num_lanes = "2";
+				max_framerate = "30000000";
+				min_gain_val = "0";
+				pixel_phase = "yuyv";
+				mode_type = "yuv";
+				pix_clk_hz = "182280000";
+				step_gain_val = "3";
+				cil_settletime = "0";
+				default_exp_time = "33333";
+				active_h = "1536";
+				serdes_pix_clk_hz = "182280000";
+				max_exp_time = "33333";
+				dynamic_pixel_bit_depth = "16";
+				active_w = "1920";
+				min_exp_time = "59";
+				max_hdr_ratio = "1";
+				vc_id = "0";
+				min_framerate = "30000000";
+				step_exp_time = "1";
+				default_framerate = "30000000";
+				csi_pixel_bit_depth = "16";
+				step_framerate = "1";
+				inherent_gain = "1";
+				embedded_metadata_height = "0";
+				line_length = "3448";
+				tegra_sinterface = "serial_a";
+				gain_factor = "10";
+			};
+		};
+	};
+
+&{/bus@0/gpio@2200000} {
+	camera-control-output-low {
+        status = "disabled";
+	};
+};
+
+
+
+&{/bus@0/host1x@13e00000/nvcsi@15a00000}{
+	channel@0 {
+		status = "okay";
+		reg = <0x00>;
+		ports {
+			#address-cells = <0x01>;
+			#size-cells = <0x00>;
+			port@0 {
+				status = "okay";
+				reg = <0x00>;
+				custom_csi_in_0_ep:endpoint@0 {
+					status = "okay";
+					vc-id = <0x00>;
+					port-index = <0x00>;
+					bus-width = <0x02>;
+					remote-endpoint = <&imx390_silly_out_ep>;
+				};
+			};
+			port@1 {
+				status = "okay";
+				reg = <0x01>;
+				custom_csi_out_0_ep:endpoint@1 {
+					remote-endpoint = <&custom_vi_in_0_ep>;
+					status = "okay";
+				};
+			};
+		};
+		};
+		};
+	
+&{/tegra-capture-vi/ports}{
+	#address-cells = <0x01>;
+	#size-cells = <0x00>;
+	port@0{
+        reg = <0>;
+		status = "okay";
+        custom_vi_in_0_ep: endpoint { 
+			status = "okay";
+			bus-width = <0x02>;
+			port-index = <0x00>;
+            remote-endpoint = <&custom_csi_out_0_ep>;
+        };
+	};
+};
+
